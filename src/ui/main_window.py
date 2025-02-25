@@ -212,9 +212,8 @@ class MainWindow(QMainWindow):
             # 특징점 시각화
             if self.viewer and self.viewer.is_visible:
                 self.viewer.clear()
-                # 원본 메쉬를 반투명하게 표시
-                self.source_model.mesh.paint_uniform_color([0.7, 0.7, 0.7])
-                self.target_model.mesh.paint_uniform_color([0.7, 0.7, 0.7])
+                
+                # 원래 색상 유지 (회색으로 변경하는 코드 제거)
                 self.viewer.add_model(self.target_model)
                 self.viewer.add_model(self.source_model)
                 
@@ -225,7 +224,7 @@ class MainWindow(QMainWindow):
                     self.viewer.add_geometry(self.registration.target_down)
             
             # 다음 단계 활성화
-            self.ransac_button.setEnabled(True)  # RANSAC 버튼 활성화
+            self.ransac_button.setEnabled(True)
             self.status_label.setText("5단계: RANSAC 전역 정합을 실행하세요")
             
         except Exception as e:

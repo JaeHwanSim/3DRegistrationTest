@@ -228,11 +228,11 @@ class Registration:
         source_down_key = source_down.select_by_index(source_key_indices)
         target_down_key = target_down.select_by_index(target_key_indices)
         
-        # 특징점을 구로 표현
+        # 특징점을 구로 표현 (크기 대폭 증가)
         source_spheres = o3d.geometry.TriangleMesh()
         target_spheres = o3d.geometry.TriangleMesh()
         
-        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=voxel_size*10)
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=voxel_size*100)  # 크기 5배 증가
         sphere.compute_vertex_normals()
         
         # 시각화를 위해 최대 1000개의 점만 선택
@@ -251,13 +251,13 @@ class Registration:
         for point in source_points:
             sphere_copy = o3d.geometry.TriangleMesh(sphere)
             sphere_copy.translate(point)
-            sphere_copy.paint_uniform_color([0, 0, 1])  # 파란색
+            sphere_copy.paint_uniform_color([0, 0.5, 1])  # 더 밝은 파란색
             source_spheres += sphere_copy
             
         for point in target_points:
             sphere_copy = o3d.geometry.TriangleMesh(sphere)
             sphere_copy.translate(point)
-            sphere_copy.paint_uniform_color([1, 0, 0])  # 빨간색
+            sphere_copy.paint_uniform_color([1, 0.3, 0])  # 더 밝은 빨간색
             target_spheres += sphere_copy
         
         print(f"전체 특징점 수 - 소스: {len(source_key_indices)}, 타겟: {len(target_key_indices)}")
