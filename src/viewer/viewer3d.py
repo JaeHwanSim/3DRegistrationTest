@@ -1,7 +1,12 @@
 import open3d as o3d
+import threading
+import time
 
 class Viewer3D:
     def __init__(self):
+        # 로그 레벨 조정 (경고 메시지 출력 안함)
+        o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+        
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window(window_name="3D Viewer", width=800, height=600)
         
@@ -14,6 +19,9 @@ class Viewer3D:
         self.setup_camera()
         self.geometries = []
         self.is_visible = False
+        self.running = False
+        self.render_thread = None
+        self.render_lock = threading.Lock()  # 스레드 동기화를 위한 락 추가
         
     def setup_camera(self):
         ctr = self.vis.get_view_control()
@@ -50,12 +58,39 @@ class Viewer3D:
             self.vis.update_renderer()
     
     def show(self):
-        """뷰어 실행"""
+        """뷰어 실행 (비블로킹 방식)"""
+        if self.running:
+            # 이미 실행 중이면 새로고침만 수행
+            self.update()
+            return
+            
+        # 뷰어 표시 및 초기화
         self.is_visible = True
-        self.vis.run()
+        self.vis.poll_events()
+        self.vis.update_renderer()
+        
+        # 비동기 렌더링 시작
+        self.running = True
+        self.render_thread = threading.Thread(target=self._render_loop)
+        self.render_thread.daemon = True  # 메인 프로그램 종료 시 자동 종료
+        self.render_thread.start()
+    
+    def _render_loop(self):
+        """렌더링 루프 (별도 스레드에서 실행)"""
+        while self.running:
+            if not self.vis.poll_events():
+                self.running = False
+                self.is_visible = False
+                break
+            self.vis.update_renderer()
+            # 프레임 제한
+            time.sleep(0.01)
     
     def close(self):
         """뷰어 종료"""
-        self.is_visible = False
+        self.running = False
+        if self.render_thread and self.render_thread.is_alive():
+            self.render_thread.join(timeout=1.0)
         self.vis.destroy_window()
+        self.is_visible = False
         

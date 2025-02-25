@@ -43,25 +43,25 @@ class MainWindow(QMainWindow):
         self.load_source_button = QPushButton("소스 모델 불러오기")
         self.load_target_button = QPushButton("타겟 모델 불러오기")
         self.show_viewer_button = QPushButton("모델 보기")
-        self.fpfh_button = QPushButton("FPFH 특징점 추출")
         self.pca_button = QPushButton("PCA 정합")
+        self.fpfh_button = QPushButton("FPFH 특징점 추출")
         self.ransac_button = QPushButton("RANSAC 전역 정합")
         self.icp_button = QPushButton("ICP 미세 정합")
         
         # 버튼 비활성화 초기 상태
         # self.load_target_button.setEnabled(False)
-        # self.show_viewer_button.setEnabled(False)
-        self.fpfh_button.setEnabled(False)
+        self.show_viewer_button.setEnabled(False)
         self.pca_button.setEnabled(False)
+        self.fpfh_button.setEnabled(False)
         self.ransac_button.setEnabled(False)
         self.icp_button.setEnabled(False)
         
         # 버튼 이벤트 연결
-        self.load_source_button.clicked.connect(lambda: self.load_stl('source'))  # 메소드 이름 수정
-        self.load_target_button.clicked.connect(lambda: self.load_stl('target'))  # 메소드 이름 수정
+        self.load_source_button.clicked.connect(lambda: self.load_stl('source'))
+        self.load_target_button.clicked.connect(lambda: self.load_stl('target'))
         self.show_viewer_button.clicked.connect(self.show_viewer)
-        self.fpfh_button.clicked.connect(self.execute_fpfh_extraction)
         self.pca_button.clicked.connect(self.execute_pca_alignment)
+        self.fpfh_button.clicked.connect(self.execute_fpfh_extraction)
         self.ransac_button.clicked.connect(self.execute_ransac)
         self.icp_button.clicked.connect(self.execute_icp)
         
@@ -69,8 +69,8 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.load_source_button)
         button_layout.addWidget(self.load_target_button)
         button_layout.addWidget(self.show_viewer_button)
-        button_layout.addWidget(self.fpfh_button)
         button_layout.addWidget(self.pca_button)
+        button_layout.addWidget(self.fpfh_button)
         button_layout.addWidget(self.ransac_button)
         button_layout.addWidget(self.icp_button)
 
@@ -126,13 +126,11 @@ class MainWindow(QMainWindow):
                 self.viewer = Viewer3D()
             if self.source_model and self.target_model:
                 self.viewer.clear()
-                self.source_model.mesh.paint_uniform_color([0, 1, 0.5])
-                self.target_model.mesh.paint_uniform_color([1, 0.5, 0])
                 self.viewer.add_model(self.target_model)
                 self.viewer.add_model(self.source_model)
                 self.viewer.show()
-                self.fpfh_button.setEnabled(True)  # FPFH 버튼 활성화
-                self.status_label.setText("4단계: FPFH 특징점을 추출하세요")
+                self.pca_button.setEnabled(True)
+                self.status_label.setText("4단계: PCA 정합을 실행하세요")
         except Exception as e:
             QMessageBox.critical(self, "오류", f"뷰어 실행 중 오류가 발생했습니다: {str(e)}")
 
@@ -169,12 +167,19 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "오류", f"정합 중 오류가 발생했습니다: {str(e)}")
 
     def execute_pca_alignment(self):
-        """4단계: PCA 기반 주축 정렬"""
+        """4단계: PCA 정합"""
         try:
-            # PCA 정렬 실행
-            self.registration.execute_pca_alignment(self.source_model, self.target_model)
+            # PCA 정합 실행
+            transformation = self.registration.execute_pca_alignment(
+                self.source_model, self.target_model)
             
-            # 뷰어 업데이트
+            # 결과 메시지 생성
+            result_msg = "PCA 정합 완료"
+            
+            # 결과 표시
+            self.result_label.setText(result_msg)
+            
+            # 모델 시각화 업데이트
             if self.viewer and self.viewer.is_visible:
                 self.viewer.clear()
                 self.viewer.add_model(self.target_model)
@@ -184,14 +189,11 @@ class MainWindow(QMainWindow):
             self.fpfh_button.setEnabled(True)
             self.status_label.setText("5단계: FPFH 특징점을 추출하세요")
             
-            # 결과 메시지
-            self.result_label.setText("PCA 기반 주축 정렬 완료")
-            
         except Exception as e:
-            QMessageBox.critical(self, "오류", f"PCA 정렬 중 오류가 발생했습니다: {str(e)}")
+            QMessageBox.critical(self, "오류", f"PCA 정합 중 오류가 발생했습니다: {str(e)}")
 
     def execute_fpfh_extraction(self):
-        """4단계: FPFH 특징점 추출"""
+        """5단계: FPFH 특징점 추출"""
         try:
             # FPFH 특징점 추출 실행
             result = self.registration.execute_fpfh_extraction(
@@ -212,8 +214,7 @@ class MainWindow(QMainWindow):
             # 특징점 시각화
             if self.viewer and self.viewer.is_visible:
                 self.viewer.clear()
-                
-                # 원래 색상 유지 (회색으로 변경하는 코드 제거)
+                # 원래 색상 유지
                 self.viewer.add_model(self.target_model)
                 self.viewer.add_model(self.source_model)
                 
@@ -225,14 +226,15 @@ class MainWindow(QMainWindow):
             
             # 다음 단계 활성화
             self.ransac_button.setEnabled(True)
-            self.status_label.setText("5단계: RANSAC 전역 정합을 실행하세요")
+            self.status_label.setText("6단계: RANSAC 전역 정합을 실행하세요")
             
         except Exception as e:
             QMessageBox.critical(self, "오류", f"FPFH 특징점 추출 중 오류가 발생했습니다: {str(e)}")
 
     def execute_ransac(self):
+        """6단계: RANSAC 전역 정합"""
         # 여기에 RANSAC 실행 로직을 추가해야 합니다
-        pass
+        self.status_label.setText("7단계: ICP 미세 정합을 실행하세요")
 
     def execute_icp(self):
         # 여기에 ICP 실행 로직을 추가해야 합니다
