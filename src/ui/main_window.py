@@ -1,10 +1,11 @@
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, 
                            QPushButton, QFileDialog, QHBoxLayout, QLabel,
-                           QMessageBox)
+                           QMessageBox, QApplication)
 from PyQt5.QtCore import Qt, QTimer
 from viewer import Viewer3D
 from model import STLModel
 from registration import Registration
+import numpy as np
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -91,28 +92,52 @@ class MainWindow(QMainWindow):
             button.setEnabled(False)
 
     def load_stl(self, model_type):
-        """STL 파일 로드"""
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, f"{model_type} STL 파일 선택", "", "STL Files (*.stl)")
-        
-        if file_name:
-            if model_type == "source":
-                self.source_model = STLModel()
-                if self.source_model.load(file_name):
+        """STL 파일 불러오기"""
+        try:
+            # 파일 선택 대화상자
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, f"{model_type.capitalize()} 모델 선택", "", "STL 파일 (*.stl)")
+            
+            if not file_path:
+                return
+                
+            # UI 업데이트 중임을 표시
+            self.status_label.setText(f"{model_type.capitalize()} 모델 로드 중...")
+            QApplication.processEvents()  # UI 업데이트
+            
+            # 모델 로드
+            model = STLModel()
+            if model.load(file_path):
+                # 모델 객체 저장
+                if model_type == 'source':
+                    self.source_model = model
                     self.load_source_button.setStyleSheet("background-color: lightgreen")
                     self.status_label.setText("소스 모델 로드 완료")
                     self.source_model.set_color([0, 1, 0.5])
-            else:
-                self.target_model = STLModel()
-                if self.target_model.load(file_name):
+                    # 다음 단계 활성화
+                    self.load_target_button.setEnabled(True)
+                    self.status_label.setText("2단계: 타겟 모델을 불러오세요")
+                else:  # target
+                    self.target_model = model
                     self.load_target_button.setStyleSheet("background-color: lightgreen")
                     self.status_label.setText("타겟 모델 로드 완료")
                     self.target_model.set_color([1, 0.5, 0])
-
-            # 두 모델이 모두 로드되었는지 확인
-            if self.source_model and self.target_model:
-                self.show_viewer_button.setEnabled(True)
-                self.status_label.setText("3단계: 모델 보기를 실행하세요")
+                    # 다음 단계 활성화
+                    self.show_viewer_button.setEnabled(True)
+                    self.status_label.setText("3단계: 모델 보기를 실행하세요")
+                
+                # 성공 메시지
+                self.result_label.setText(f"{model_type.capitalize()} 모델 로드 완료\n정점 수: {len(model.mesh.vertices)}")
+                
+                # 두 모델이 모두 로드되었는지 확인
+                if self.source_model and self.target_model:
+                    self.status_label.setText("3단계: 모델 보기를 실행하세요")
+            else:
+                QMessageBox.critical(self, "오류", f"{model_type.capitalize()} 모델 로드 중 오류가 발생했습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"STL 파일 로드 중 오류가 발생했습니다: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def update_viewer(self):
         """주기적으로 뷰어 업데이트"""
@@ -122,17 +147,43 @@ class MainWindow(QMainWindow):
     def show_viewer(self):
         """모델 보기"""
         try:
+            self.status_label.setText("뷰어 초기화 중...")
+            QApplication.processEvents()  # UI 업데이트
+            
+            # 뷰어가 없으면 새로 생성
             if self.viewer is None:
                 self.viewer = Viewer3D()
-            if self.source_model and self.target_model:
-                self.viewer.clear()
-                self.viewer.add_model(self.target_model)
-                self.viewer.add_model(self.source_model)
-                self.viewer.show()
-                self.pca_button.setEnabled(True)
-                self.status_label.setText("4단계: PCA 정합을 실행하세요")
+            
+            # 뷰어 초기화
+            self.viewer.clear()
+            
+            # 모델 추가 전 확인
+            if self.source_model is None or self.target_model is None:
+                QMessageBox.warning(self, "경고", "소스 모델과 타겟 모델을 모두 불러와야 합니다.")
+                return
+                
+            # 타겟 모델 먼저 추가 (레이어 순서)
+            self.viewer.add_model(self.target_model)
+            QApplication.processEvents()  # UI 업데이트
+            
+            # 소스 모델 추가
+            self.viewer.add_model(self.source_model)
+            QApplication.processEvents()  # UI 업데이트
+            
+            # 뷰어 표시
+            self.status_label.setText("뷰어 표시 중...")
+            QApplication.processEvents()  # UI 업데이트
+            
+            self.viewer.show()
+            
+            # 다음 단계 활성화
+            self.pca_button.setEnabled(True)
+            self.status_label.setText("4단계: PCA 정합을 실행하세요")
+            
         except Exception as e:
             QMessageBox.critical(self, "오류", f"뷰어 실행 중 오류가 발생했습니다: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def closeEvent(self, event):
         """윈도우 종료 시 처리"""
@@ -169,9 +220,19 @@ class MainWindow(QMainWindow):
     def execute_pca_alignment(self):
         """4단계: PCA 정합"""
         try:
-            # PCA 정합 실행
+            # UI 업데이트
+            self.status_label.setText("PCA 정합 실행 중...")
+            self.result_label.setText("PCA 계산 중...")
+            self.pca_button.setEnabled(False)
+            QApplication.processEvents()  # UI 업데이트
+            
+            # PCA 정합 실행 (시간이 걸리는 작업)
             transformation = self.registration.execute_pca_alignment(
                 self.source_model, self.target_model)
+            
+            # UI 업데이트
+            self.status_label.setText("모델 업데이트 중...")
+            QApplication.processEvents()  # UI 업데이트
             
             # 결과 메시지 생성
             result_msg = "PCA 정합 완료"
@@ -181,23 +242,46 @@ class MainWindow(QMainWindow):
             
             # 모델 시각화 업데이트
             if self.viewer and self.viewer.is_visible:
+                self.status_label.setText("뷰어 업데이트 중...")
+                QApplication.processEvents()  # UI 업데이트
+                
                 self.viewer.clear()
                 self.viewer.add_model(self.target_model)
+                QApplication.processEvents()  # UI 업데이트
+                
                 self.viewer.add_model(self.source_model)
+                QApplication.processEvents()  # UI 업데이트
+                
+                # 뷰 중심 재설정
+                self.viewer.reset_view_to_center()
             
             # 다음 단계 활성화
-            self.fpfh_button.setEnabled(True)
+            self.pca_button.setEnabled(True)
+            self.fpfh_button.setEnabled(True)  # FPFH 버튼 활성화
             self.status_label.setText("5단계: FPFH 특징점을 추출하세요")
             
         except Exception as e:
+            self.pca_button.setEnabled(True)  # 버튼 재활성화
             QMessageBox.critical(self, "오류", f"PCA 정합 중 오류가 발생했습니다: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def execute_fpfh_extraction(self):
         """5단계: FPFH 특징점 추출"""
         try:
-            # FPFH 특징점 추출 실행
-            result = self.registration.execute_fpfh_extraction(
+            # UI 업데이트
+            self.status_label.setText("FPFH 특징점 추출 중...")
+            self.result_label.setText("포인트 클라우드 다운샘플링 중...")
+            self.fpfh_button.setEnabled(False)  # 버튼 비활성화
+            QApplication.processEvents()  # UI 업데이트
+            
+            # FPFH 계산 실행
+            result = self.registration.compute_fpfh_features(
                 self.source_model, self.target_model)
+            
+            # UI 업데이트
+            self.status_label.setText("특징점 시각화 중...")
+            QApplication.processEvents()  # UI 업데이트
             
             # 결과 메시지 생성
             result_msg = (
@@ -213,31 +297,106 @@ class MainWindow(QMainWindow):
             
             # 특징점 시각화
             if self.viewer and self.viewer.is_visible:
+                self.status_label.setText("뷰어 업데이트 중...")
+                QApplication.processEvents()  # UI 업데이트
+                
                 self.viewer.clear()
-                # 원래 색상 유지
+                
+                # 원래 모델 추가
                 self.viewer.add_model(self.target_model)
+                QApplication.processEvents()  # UI 업데이트
+                
                 self.viewer.add_model(self.source_model)
+                QApplication.processEvents()  # UI 업데이트
                 
                 # 특징점 추가
                 if hasattr(self.registration, 'source_down'):
                     self.viewer.add_geometry(self.registration.source_down)
+                    QApplication.processEvents()  # UI 업데이트
+                
                 if hasattr(self.registration, 'target_down'):
                     self.viewer.add_geometry(self.registration.target_down)
+                    QApplication.processEvents()  # UI 업데이트
+                
+                # 뷰 중심 재설정
+                self.viewer.reset_view_to_center()
             
             # 다음 단계 활성화
-            self.ransac_button.setEnabled(True)
+            self.fpfh_button.setEnabled(True)  # 버튼 재활성화
+            self.ransac_button.setEnabled(True)  # RANSAC 버튼 활성화
             self.status_label.setText("6단계: RANSAC 전역 정합을 실행하세요")
             
         except Exception as e:
+            self.fpfh_button.setEnabled(True)  # 버튼 재활성화
             QMessageBox.critical(self, "오류", f"FPFH 특징점 추출 중 오류가 발생했습니다: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def execute_ransac(self):
         """6단계: RANSAC 전역 정합"""
-        # 여기에 RANSAC 실행 로직을 추가해야 합니다
-        self.status_label.setText("7단계: ICP 미세 정합을 실행하세요")
+        try:
+            # RANSAC 전역 정합 실행
+            result = self.registration.execute_ransac(
+                self.source_model, self.target_model)
+            
+            # 결과 메시지 생성
+            result_msg = (
+                f"RANSAC 전역 정합 완료\n"
+                f"일치하는 점 수: {result['n_points']}\n"
+                f"RMSE: {result['rmse']:.4f}\n"
+                f"변환 행렬:\n{np.array2string(result['transformation'], precision=4)}"
+            )
+            
+            # 결과 표시
+            self.result_label.setText(result_msg)
+            
+            # 모델 시각화 업데이트
+            if self.viewer and self.viewer.is_visible:
+                self.viewer.clear()
+                self.viewer.add_model(self.target_model)
+                self.viewer.add_model(self.source_model)
+                
+                # 뷰 중심 재설정
+                self.viewer.reset_view_to_center()
+            
+            # 다음 단계 활성화
+            self.icp_button.setEnabled(True)  # ICP 버튼 활성화
+            self.status_label.setText("7단계: ICP 미세 정합을 실행하세요")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"RANSAC 전역 정합 중 오류가 발생했습니다: {str(e)}")
 
     def execute_icp(self):
-        # 여기에 ICP 실행 로직을 추가해야 합니다
-        pass
+        """7단계: ICP 미세 정합"""
+        try:
+            # ICP 미세 정합 실행
+            result = self.registration.execute_icp(
+                self.source_model, self.target_model)
+            
+            # 결과 메시지 생성
+            result_msg = (
+                f"ICP 미세 정합 완료\n"
+                f"정합 점 수: {result['n_points']}\n"
+                f"RMSE: {result['rmse']:.4f}\n"
+                f"반복 횟수: {result['iteration']}\n"
+                f"변환 행렬:\n{np.array2string(result['transformation'], precision=4)}"
+            )
+            
+            # 결과 표시
+            self.result_label.setText(result_msg)
+            
+            # 모델 시각화 업데이트
+            if self.viewer and self.viewer.is_visible:
+                self.viewer.clear()
+                self.viewer.add_model(self.target_model)
+                self.viewer.add_model(self.source_model)
+                
+                # 뷰 중심 재설정
+                self.viewer.reset_view_to_center()
+            
+            self.status_label.setText("정합 완료! 모든 단계가 완료되었습니다.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"ICP 미세 정합 중 오류가 발생했습니다: {str(e)}")
 
     # 여기에 나머지 단계별 실행 함수들이 추가되어야 합니다

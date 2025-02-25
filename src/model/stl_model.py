@@ -30,5 +30,12 @@ class STLModel:
     def get_name(self):
         return self.name
     
+    def transform(self, transformation_matrix):
+        """메쉬에 변환 행렬 적용"""
+        if self.mesh:
+            # Open3D의 변환 메서드 사용
+            self.mesh = self.mesh.transform(transformation_matrix)
+            return True
+        return False
 
 

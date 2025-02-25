@@ -50,7 +50,23 @@ class Registration:
         return transformation
         
     def preprocess_point_cloud(self, pcd, voxel_size=0.08):
-        """포인트 클라우드 전처리"""
+        """포인트 클라우드 전처리 - FPFH 계산 버전"""
+        # 다운샘플링
+        pcd_down = pcd.voxel_down_sample(voxel_size)
+        
+        # 법선 벡터 계산
+        pcd_down.estimate_normals(
+            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2, max_nn=30))
+        
+        # FPFH 특징점 계산
+        pcd_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+            pcd_down,
+            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
+        
+        return pcd_down, pcd_fpfh
+    
+    def preprocess_point_cloud_with_transform(self, pcd, voxel_size=0.08):
+        """포인트 클라우드 전처리 (변환 행렬 포함)"""
         # 주축 기준 정렬
         init_transform = self.align_to_principal_axes(pcd)
         pcd.transform(init_transform)
@@ -117,8 +133,8 @@ class Registration:
         
         # 전처리 및 초기 정렬
         voxel_size = 0.08
-        source_down, source_fpfh, source_init = self.preprocess_point_cloud(source_pcd, voxel_size)
-        target_down, target_fpfh, target_init = self.preprocess_point_cloud(target_pcd, voxel_size)
+        source_down, source_fpfh = self.preprocess_point_cloud(source_pcd, voxel_size)
+        target_down, target_fpfh = self.preprocess_point_cloud(target_pcd, voxel_size)
         
         print(f"다운샘플링 후 포인트 수: source={len(source_down.points)}, target={len(target_down.points)}")
         
@@ -151,131 +167,140 @@ class Registration:
         }
 
     def execute_pca_alignment(self, source_model, target_model):
-        """PCA 기반 주축 정렬"""
-        # 포인트 클라우드 변환
-        source_pcd = self.mesh_to_pointcloud(source_model.mesh)
-        target_pcd = self.mesh_to_pointcloud(target_model.mesh)
-        
-        # 소스 모델 중심점과 주축 계산
-        source_points = np.asarray(source_pcd.points)
-        source_mean = np.mean(source_points, axis=0)
-        source_covariance = np.cov(source_points.T)
-        source_eigenvalues, source_eigenvectors = np.linalg.eigh(source_covariance)
-        
-        # 타겟 모델 중심점과 주축 계산
-        target_points = np.asarray(target_pcd.points)
-        target_mean = np.mean(target_points, axis=0)
-        target_covariance = np.cov(target_points.T)
-        target_eigenvalues, target_eigenvectors = np.linalg.eigh(target_covariance)
-        
-        # 회전 행렬 계산
-        R = np.dot(target_eigenvectors, source_eigenvectors.T)
-        
-        # y축이 위를 향하도록 조정
-        if R[1, 1] < 0:
-            R[:, 1] = -R[:, 1]
-        
-        # 변환 행렬 생성
-        transformation = np.identity(4)
-        transformation[:3, :3] = R
-        transformation[:3, 3] = target_mean - np.dot(R, source_mean)
-        
-        # 소스 메쉬에 변환 적용
-        source_model.mesh.transform(transformation)
-        
-        return transformation
-
-    def execute_fpfh_extraction(self, source_model, target_model, voxel_size=0.001):
-        """FPFH 특징점 추출"""
-        # 포인트 클라우드 변환
-        source_pcd = self.mesh_to_pointcloud(source_model.mesh)
-        target_pcd = self.mesh_to_pointcloud(target_model.mesh)
-        
-        print(f"초기 포인트 수 - 소스: {len(source_pcd.points)}, 타겟: {len(target_pcd.points)}")
-        
-        # 다운샘플링
-        source_down = source_pcd.voxel_down_sample(voxel_size)
-        target_down = target_pcd.voxel_down_sample(voxel_size)
-        
-        print(f"다운샘플링 후 포인트 수 - 소스: {len(source_down.points)}, 타겟: {len(target_down.points)}")
-        
-        # 법선 벡터 계산
-        source_down.estimate_normals(
-            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
-        target_down.estimate_normals(
-            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
-        
-        # FPFH 특징점 계산
-        source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
-            source_down,
-            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 10, max_nn=200))
-        target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
-            target_down,
-            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 10, max_nn=200))
-        
-        # 특징점의 중요도 계산
-        source_importance = np.sum(np.abs(source_fpfh.data), axis=0)
-        target_importance = np.sum(np.abs(target_fpfh.data), axis=0)
-        
-        # 상위 95% 특징점 선택
-        source_threshold = np.percentile(source_importance, 5)
-        target_threshold = np.percentile(target_importance, 5)
-        
-        source_key_indices = np.where(source_importance > source_threshold)[0]
-        target_key_indices = np.where(target_importance > target_threshold)[0]
-        
-        # 특징점 시각화를 위한 포인트 클라우드 생성
-        source_down_key = source_down.select_by_index(source_key_indices)
-        target_down_key = target_down.select_by_index(target_key_indices)
-        
-        # 특징점을 구로 표현 (크기 대폭 증가)
-        source_spheres = o3d.geometry.TriangleMesh()
-        target_spheres = o3d.geometry.TriangleMesh()
-        
-        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=voxel_size*100)  # 크기 5배 증가
-        sphere.compute_vertex_normals()
-        
-        # 시각화를 위해 최대 1000개의 점만 선택
-        max_points = 1000
-        source_points = np.asarray(source_down_key.points)
-        target_points = np.asarray(target_down_key.points)
-        
-        if len(source_points) > max_points:
-            source_indices = np.random.choice(len(source_points), max_points, replace=False)
-            source_points = source_points[source_indices]
-        
-        if len(target_points) > max_points:
-            target_indices = np.random.choice(len(target_points), max_points, replace=False)
-            target_points = target_points[target_indices]
-        
-        for point in source_points:
-            sphere_copy = o3d.geometry.TriangleMesh(sphere)
-            sphere_copy.translate(point)
-            sphere_copy.paint_uniform_color([0, 0.5, 1])  # 더 밝은 파란색
-            source_spheres += sphere_copy
+        """PCA 정렬 수행"""
+        try:
+            print("PCA 정합 시작...")
             
-        for point in target_points:
-            sphere_copy = o3d.geometry.TriangleMesh(sphere)
-            sphere_copy.translate(point)
-            sphere_copy.paint_uniform_color([1, 0.3, 0])  # 더 밝은 빨간색
-            target_spheres += sphere_copy
-        
-        print(f"전체 특징점 수 - 소스: {len(source_key_indices)}, 타겟: {len(target_key_indices)}")
-        print(f"시각화된 특징점 수 - 소스: {len(source_points)}, 타겟: {len(target_points)}")
-        
-        # 결과 저장
-        self.source_down = source_spheres
-        self.target_down = target_spheres
-        self.source_fpfh = source_fpfh
-        self.target_fpfh = target_fpfh
-        
-        return {
-            'source_points': len(source_key_indices),
-            'target_points': len(target_key_indices),
-            'source_fpfh': source_fpfh.data.shape,
-            'target_fpfh': target_fpfh.data.shape,
-            'source_key_ratio': len(source_key_indices) / len(source_importance),
-            'target_key_ratio': len(target_key_indices) / len(target_importance)
-        }
+            # 소스 포인트 클라우드 추출
+            source_pcd = self.mesh_to_pointcloud(source_model.mesh)
+            print("소스 포인트 클라우드 생성 완료")
+            
+            # 타겟 포인트 클라우드 추출
+            target_pcd = self.mesh_to_pointcloud(target_model.mesh)
+            print("타겟 포인트 클라우드 생성 완료")
+            
+            # PCA 계산 및 정렬
+            print("PCA 계산 중...")
+            # 소스 PCA
+            source_pts = np.asarray(source_pcd.points)
+            source_mean = np.mean(source_pts, axis=0)
+            source_centered = source_pts - source_mean
+            source_cov = np.cov(source_centered.T)
+            source_eigvals, source_eigvecs = np.linalg.eigh(source_cov)
+            # 고유값 순서 정렬 (내림차순)
+            source_idx = np.argsort(source_eigvals)[::-1]
+            source_eigvecs = source_eigvecs[:, source_idx]
+            print("소스 PCA 계산 완료")
+            
+            # 타겟 PCA
+            target_pts = np.asarray(target_pcd.points)
+            target_mean = np.mean(target_pts, axis=0)
+            target_centered = target_pts - target_mean
+            target_cov = np.cov(target_centered.T)
+            target_eigvals, target_eigvecs = np.linalg.eigh(target_cov)
+            # 고유값 순서 정렬 (내림차순)
+            target_idx = np.argsort(target_eigvals)[::-1]
+            target_eigvecs = target_eigvecs[:, target_idx]
+            print("타겟 PCA 계산 완료")
+            
+            # 회전 행렬 계산
+            rotation = np.dot(source_eigvecs, target_eigvecs.T)
+            
+            # 변환 행렬 생성
+            transformation = np.eye(4)
+            transformation[:3, :3] = rotation
+            # 먼저 소스의 중심을 원점으로 이동
+            translation1 = np.eye(4)
+            translation1[:3, 3] = -source_mean
+            # 회전 후 타겟의 중심으로 이동
+            translation2 = np.eye(4)
+            translation2[:3, 3] = target_mean
+            
+            # 최종 변환 행렬: T2 * R * T1
+            transformation = np.dot(translation2, np.dot(transformation, translation1))
+            print("변환 행렬 계산 완료")
+            
+            # 소스 모델 변환
+            source_model.transform(transformation)
+            print("PCA 정합 완료")
+            
+            return transformation
+            
+        except Exception as e:
+            print(f"PCA 정합 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def compute_fpfh_features(self, source_model, target_model):
+        """FPFH 특징 계산 및 시각화"""
+        try:
+            print("FPFH 특징점 추출 시작...")
+            
+            # 모델 확인
+            if source_model is None or target_model is None:
+                print("유효하지 않은 모델")
+                raise ValueError("유효하지 않은 모델")
+                
+            # 메쉬를 포인트 클라우드로 변환
+            print("소스 포인트 클라우드 추출 중...")
+            source_pcd = self.mesh_to_pointcloud(source_model.mesh)
+            print(f"소스 포인트 클라우드 생성 완료: {len(source_pcd.points)}점")
+            
+            print("타겟 포인트 클라우드 추출 중...")
+            target_pcd = self.mesh_to_pointcloud(target_model.mesh)
+            print(f"타겟 포인트 클라우드 생성 완료: {len(target_pcd.points)}점")
+            
+            # 다운샘플링 및 FPFH 계산 파라미터
+            # 치아 모델에 적합한 값으로 조정
+            self.voxel_size = 0.001  # 더 조밀한 다운샘플링 (치아 크기에 맞게)
+            
+            # 소스 모델 다운샘플링 - 변환 없는 버전 사용
+            print("소스 포인트 클라우드 다운샘플링 중...")
+            source_down, source_fpfh = self.preprocess_point_cloud(source_pcd, self.voxel_size)
+            print(f"소스 다운샘플링 완료: {len(source_down.points)}점")
+            
+            # 타겟 모델 다운샘플링 - 변환 없는 버전 사용
+            print("타겟 포인트 클라우드 다운샘플링 중...")
+            target_down, target_fpfh = self.preprocess_point_cloud(target_pcd, self.voxel_size)
+            print(f"타겟 다운샘플링 완료: {len(target_down.points)}점")
+            
+            # 특징점 시각화 준비
+            source_sphere_size = self.voxel_size * 50
+            target_sphere_size = self.voxel_size * 50
+            
+            # 소스 특징점 포인트 클라우드 생성
+            print("소스 특징점 시각화 준비 중...")
+            self.source_down = o3d.geometry.PointCloud()
+            self.source_down.points = source_down.points
+            self.source_down.paint_uniform_color([0.0, 0.5, 1.0])  # 밝은 파란색
+            
+            # 타겟 특징점 포인트 클라우드 생성
+            print("타겟 특징점 시각화 준비 중...")
+            self.target_down = o3d.geometry.PointCloud()
+            self.target_down.points = target_down.points
+            self.target_down.paint_uniform_color([1.0, 0.3, 0.3])  # 밝은 빨간색
+            
+            # FPFH 데이터 저장
+            self.source_fpfh = source_fpfh
+            self.target_fpfh = target_fpfh
+            
+            print("FPFH 특징점 추출 완료")
+            
+            # 결과 데이터 반환
+            result = {
+                'source_points': len(source_down.points),
+                'target_points': len(target_down.points),
+                'source_key_ratio': len(source_down.points) / len(source_pcd.points),
+                'target_key_ratio': len(target_down.points) / len(target_pcd.points)
+            }
+            
+            return result
+            
+        except Exception as e:
+            print(f"FPFH 특징점 추출 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         
