@@ -8,12 +8,21 @@ class Registration:
         self.target = None
         self.transformation = np.identity(4)
         
-    def mesh_to_pointcloud(self, mesh):
-        """TriangleMesh를 PointCloud로 변환"""
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = mesh.vertices
-        pcd.colors = mesh.vertex_colors
-        pcd.normals = mesh.vertex_normals
+    def mesh_to_pointcloud(self, mesh, sample_density=50000):
+        """TriangleMesh를 PointCloud로 변환
+        
+        Args:
+            mesh: 변환할 메쉬
+            sample_density: 샘플링할 포인트 수
+        """
+        # 메쉬 표면에서 균일하게 포인트 샘플링
+        pcd = mesh.sample_points_uniformly(number_of_points=sample_density)
+        
+        # 법선 벡터 계산
+        pcd.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.01, max_nn=30))
+        pcd.normalize_normals()
+        
         return pcd
 
     def align_to_principal_axes(self, pcd):
@@ -175,6 +184,98 @@ class Registration:
         source_model.mesh.transform(transformation)
         
         return transformation
-    
-    
+
+    def execute_fpfh_extraction(self, source_model, target_model, voxel_size=0.001):
+        """FPFH 특징점 추출"""
+        # 포인트 클라우드 변환
+        source_pcd = self.mesh_to_pointcloud(source_model.mesh)
+        target_pcd = self.mesh_to_pointcloud(target_model.mesh)
+        
+        print(f"초기 포인트 수 - 소스: {len(source_pcd.points)}, 타겟: {len(target_pcd.points)}")
+        
+        # 다운샘플링
+        source_down = source_pcd.voxel_down_sample(voxel_size)
+        target_down = target_pcd.voxel_down_sample(voxel_size)
+        
+        print(f"다운샘플링 후 포인트 수 - 소스: {len(source_down.points)}, 타겟: {len(target_down.points)}")
+        
+        # 법선 벡터 계산
+        source_down.estimate_normals(
+            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
+        target_down.estimate_normals(
+            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=100))
+        
+        # FPFH 특징점 계산
+        source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+            source_down,
+            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 10, max_nn=200))
+        target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+            target_down,
+            o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 10, max_nn=200))
+        
+        # 특징점의 중요도 계산
+        source_importance = np.sum(np.abs(source_fpfh.data), axis=0)
+        target_importance = np.sum(np.abs(target_fpfh.data), axis=0)
+        
+        # 상위 95% 특징점 선택
+        source_threshold = np.percentile(source_importance, 5)
+        target_threshold = np.percentile(target_importance, 5)
+        
+        source_key_indices = np.where(source_importance > source_threshold)[0]
+        target_key_indices = np.where(target_importance > target_threshold)[0]
+        
+        # 특징점 시각화를 위한 포인트 클라우드 생성
+        source_down_key = source_down.select_by_index(source_key_indices)
+        target_down_key = target_down.select_by_index(target_key_indices)
+        
+        # 특징점을 구로 표현
+        source_spheres = o3d.geometry.TriangleMesh()
+        target_spheres = o3d.geometry.TriangleMesh()
+        
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=voxel_size*10)
+        sphere.compute_vertex_normals()
+        
+        # 시각화를 위해 최대 1000개의 점만 선택
+        max_points = 1000
+        source_points = np.asarray(source_down_key.points)
+        target_points = np.asarray(target_down_key.points)
+        
+        if len(source_points) > max_points:
+            source_indices = np.random.choice(len(source_points), max_points, replace=False)
+            source_points = source_points[source_indices]
+        
+        if len(target_points) > max_points:
+            target_indices = np.random.choice(len(target_points), max_points, replace=False)
+            target_points = target_points[target_indices]
+        
+        for point in source_points:
+            sphere_copy = o3d.geometry.TriangleMesh(sphere)
+            sphere_copy.translate(point)
+            sphere_copy.paint_uniform_color([0, 0, 1])  # 파란색
+            source_spheres += sphere_copy
+            
+        for point in target_points:
+            sphere_copy = o3d.geometry.TriangleMesh(sphere)
+            sphere_copy.translate(point)
+            sphere_copy.paint_uniform_color([1, 0, 0])  # 빨간색
+            target_spheres += sphere_copy
+        
+        print(f"전체 특징점 수 - 소스: {len(source_key_indices)}, 타겟: {len(target_key_indices)}")
+        print(f"시각화된 특징점 수 - 소스: {len(source_points)}, 타겟: {len(target_points)}")
+        
+        # 결과 저장
+        self.source_down = source_spheres
+        self.target_down = target_spheres
+        self.source_fpfh = source_fpfh
+        self.target_fpfh = target_fpfh
+        
+        return {
+            'source_points': len(source_key_indices),
+            'target_points': len(target_key_indices),
+            'source_fpfh': source_fpfh.data.shape,
+            'target_fpfh': target_fpfh.data.shape,
+            'source_key_ratio': len(source_key_indices) / len(source_importance),
+            'target_key_ratio': len(target_key_indices) / len(target_importance)
+        }
+        
         

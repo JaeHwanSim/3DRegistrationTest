@@ -27,6 +27,13 @@ class Viewer3D:
             self.vis.add_geometry(model.mesh, reset_bounding_box=True)
             self.geometries.append(model.mesh)
             self.update()
+            
+    def add_geometry(self, geometry):
+        """포인트 클라우드나 메쉬 추가"""
+        if geometry:
+            self.vis.add_geometry(geometry, reset_bounding_box=False)
+            self.geometries.append(geometry)
+            self.update()
     
     def clear(self):
         """모든 지오메트리 제거"""
